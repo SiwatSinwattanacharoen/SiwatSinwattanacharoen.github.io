@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Skyblock</title>
+<style>
+  :root { --bg: #000000; --hint: #8a8a8a; }
+  html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+  canvas:active { cursor: grabbing; }
+  #hint {
+    position: fixed; left: 0; right: 0;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 20px);
+    text-align: center; color: var(--hint);
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", "Noto Sans Thai", sans-serif;
+    pointer-events: none; transition: opacity .6s;
+  }
+  #hint.gone { opacity: 0; }
+  #err { color: #fff; font: 16px system-ui, sans-serif; padding: 24px; display: none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hint">ลากเพื่อหมุน · เลื่อนล้อหรือถ่างนิ้วเพื่อซูม</div>
+<div id="err">เบราว์เซอร์นี้ไม่รองรับ WebGL</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function () {
+  var canvas = document.getElementById('c');
+  var renderer;
+  try {
+    renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
+  } catch (e) {
+    canvas.style.display = 'none';
+    document.getElementById('hint').style.display = 'none';
+    document.getElementById('err').style.display = 'block';
+    return;
+  }
+  renderer.setClearColor(0x000000, 1);
+
+  var scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x000000);
+
+  var camera = new THREE.PerspectiveCamera(45, 1, 0.1, 200);
+
+  // Lights: top faces stay pure white, side faces fall to grey so the blocks read as 3D
+  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+  var sun = new THREE.DirectionalLight(0xffffff, 0.6);
+  sun.position.set(6, 12, 4);
+  scene.add(sun);
+
+  // Skyblock island: a single layer of 10 x 10 white blocks floating in the void
+  var SIZE = 10;
+  var blockGeo = new THREE.BoxGeometry(1, 1, 1);
+  var blockMat = new THREE.MeshLambertMaterial({
+    color: 0xffffff,
+    polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1
+  });
+  var blocks = new THREE.InstancedMesh(blockGeo, blockMat, SIZE * SIZE);
+  var m = new THREE.Matrix4();
+  var edgeGeo = new THREE.EdgesGeometry(blockGeo);
+  var edgeMat = new THREE.LineBasicMaterial({ color: 0x9a9a9a });
+  var island = new THREE.Group();
+  var n = 0;
+  for (var x = 0; x < SIZE; x++) {
+    for (var z = 0; z < SIZE; z++) {
+      var px = x - (SIZE - 1) / 2, pz = z - (SIZE - 1) / 2;
+      m.makeTranslation(px, 0, pz);
+      blocks.setMatrixAt(n++, m);
+      var edges = new THREE.LineSegments(edgeGeo, edgeMat);
+      edges.position.set(px, 0, pz);
+      island.add(edges);
+    }
+  }
+  blocks.instanceMatrix.needsUpdate = true;
+  island.add(blocks);
+  scene.add(island);
+
+  // Orbit camera (drag to rotate, wheel / pinch to zoom)
+  var target = new THREE.Vector3(0, 0, 0);
+  var theta = Math.PI / 4, phi = 1.0, radius = 17;
+  var vTheta = 0, vPhi = 0;
+  var MIN_R = 6, MAX_R = 60;
+  var reduceMotion = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var autoRotate = !reduceMotion;
+
+  var pointers = new Map();
+  var lastPinch = 0;
+  var hint = document.getElementById('hint');
+
+  function interacted() {
+    autoRotate = false;
+    hint.classList.add('gone');
+  }
+
+  canvas.addEventListener('pointerdown', function (e) {
+    canvas.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size === 2) lastPinch = pinchDist();
+    interacted();
+  });
+  canvas.addEventListener('pointermove', function (e) {
+    var p = pointers.get(e.pointerId);
+    if (!p) return;
+    var dx = e.clientX - p.x, dy = e.clientY - p.y;
+    p.x = e.clientX; p.y = e.clientY;
+    if (pointers.size === 1) {
+      vTheta = -dx * 0.006;
+      vPhi = -dy * 0.006;
+      theta += vTheta;
+      phi += vPhi;
+    } else if (pointers.size === 2) {
+      var d = pinchDist();
+      if (lastPinch) radius *= lastPinch / d;
+      lastPinch = d;
+    }
+    clamp();
+  });
+  function endPointer(e) {
+    pointers.delete(e.pointerId);
+    lastPinch = 0;
+  }
+  canvas.addEventListener('pointerup', endPointer);
+  canvas.addEventListener('pointercancel', endPointer);
+  canvas.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    radius *= Math.exp(e.deltaY * 0.001);
+    clamp();
+    interacted();
+  }, { passive: false });
+
+  function pinchDist() {
+    var pts = Array.from(pointers.values());
+    return Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1;
+  }
+  function clamp() {
+    phi = Math.max(0.15, Math.min(Math.PI - 0.15, phi));
+    radius = Math.max(MIN_R, Math.min(MAX_R, radius));
+  }
+
+  function resize() {
+    var w = window.innerWidth, h = window.innerHeight;
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    // keep the whole island in view on narrow portrait screens
+    camera.fov = w / h < 1 ? 60 : 45;
+    camera.updateProjectionMatrix();
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  function frame() {
+    if (autoRotate) theta += 0.003;
+    if (pointers.size === 0) {
+      // small inertia after releasing a drag
+      theta += vTheta; phi += vPhi;
+      vTheta *= 0.92; vPhi *= 0.92;
+      if (Math.abs(vTheta) < 1e-5) vTheta = 0;
+      if (Math.abs(vPhi) < 1e-5) vPhi = 0;
+      clamp();
+    }
+    camera.position.set(
+      target.x + radius * Math.sin(phi) * Math.sin(theta),
+      target.y + radius * Math.cos(phi),
+      target.z + radius * Math.sin(phi) * Math.cos(theta)
+    );
+    camera.lookAt(target);
+    renderer.render(scene, camera);
+    requestAnimationFrame(frame);
+  }
+  frame();
+})();
+</script>
+</body>
+</html>
