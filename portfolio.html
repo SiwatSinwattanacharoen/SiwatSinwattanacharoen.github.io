@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Portfolio — ห้องนอนของศิวัช</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#0a0a0f; --fg:#fff; --accent:#ff9f1a; --font:"Noto Sans Thai",Tahoma,system-ui,sans-serif; }
+  html,body { margin:0; height:100%; background:var(--bg); overflow:hidden; font-family:var(--font); }
+  canvas { display:block; width:100%; height:100%; touch-action:none; }
+  #info { position:fixed; left:14px; top:calc(env(safe-area-inset-top,0px) + 14px); max-width:min(320px,70vw);
+    background:rgba(0,0,0,.65); color:var(--fg); padding:10px 14px; border-radius:10px; font-size:14px; line-height:1.5; }
+  #info b { display:block; font-size:16px; color:var(--accent); }
+  #info a { display:inline-block; margin-top:6px; color:#7cc4ff; }
+  #menu { position:fixed; right:calc(env(safe-area-inset-right,0px) + 14px); top:50%; transform:translateY(-50%);
+    display:flex; flex-direction:column; gap:8px; }
+  #menu button { font:600 14px var(--font); background:#fff; color:#111; border:0; border-radius:8px; padding:9px 16px; cursor:pointer; }
+  #menu button:hover { background:#ffe2b0; }
+  #menu button.on { background:var(--accent); color:#fff; }
+  #hint { position:fixed; left:14px; bottom:calc(env(safe-area-inset-bottom,0px) + 14px); color:#8a8a8a; font-size:13px; transition:opacity .6s; }
+  #hint.gone { opacity:0; }
+  #err { display:none; color:#fff; padding:24px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="info"><b id="t"></b><span id="d"></span><br><a id="lnk" hidden href="800_Paint.html" target="_blank" rel="noopener">เปิดโปรแกรม Paint →</a></div>
+<div id="hint">ลากเพื่อหมุน · กด Shift ค้างแล้วลากเพื่อเลื่อนกล้อง · เลื่อนล้อ/ถ่างนิ้วเพื่อซูม<br>กดที่ของในห้องเพื่อดูใกล้ ๆ</div>
+<nav id="menu"></nav>
+<div id="err">เบราว์เซอร์นี้ไม่รองรับ WebGL</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function () {
+  var canvas = document.getElementById('c'), renderer;
+  try { renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true }); }
+  catch (e) { canvas.style.display = 'none'; document.getElementById('err').style.display = 'block'; return; }
+
+  var scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0a0a0f);
+  var camera = new THREE.PerspectiveCamera(45, 1, 0.1, 200);
+
+  scene.add(new THREE.AmbientLight(0xfff1e0, 0.7));
+  var sun = new THREE.DirectionalLight(0xffffff, 0.55); sun.position.set(6, 10, 8); scene.add(sun);
+  var lampLight = new THREE.PointLight(0xffc27a, 0.9, 8); lampLight.position.set(-0.8, 2.0, -3.3); scene.add(lampLight);
+  var screenLight = new THREE.PointLight(0x6aa8ff, 0.7, 6); screenLight.position.set(2.2, 2.3, -2.6); scene.add(screenLight);
+
+  // ---------- helpers ----------
+  function box(w, h, d, color, x, y, z, parent, emissive) {
+    var mat = new THREE.MeshLambertMaterial({ color: color });
+    if (emissive) mat.emissive = new THREE.Color(emissive);
+    var m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    m.position.set(x, y, z); (parent || scene).add(m); return m;
+  }
+  function group(view) { var g = new THREE.Group(); g.userData.view = view; scene.add(g); return g; }
+  function canvasTex(w, h, draw) {
+    var c = document.createElement('canvas'); c.width = w; c.height = h;
+    var t = new THREE.CanvasTexture(c); t.anisotropy = 4;
+    var redraw = function () { draw(c.getContext('2d'), w, h); t.needsUpdate = true; };
+    redraw(); return { tex: t, redraw: redraw };
+  }
+  var FONT = '"Noto Sans Thai",Tahoma,sans-serif';
+
+  // ---------- room shell (corner cutaway) ----------
+  var room = new THREE.Group(); scene.add(room);
+  box(8, 0.2, 8, 0xb98a5e, 0, -0.1, 0, room);
+  box(8.2, 5, 0.2, 0xe8dccb, 0, 2.5, -4.1, room);
+  box(0.2, 5, 8.2, 0xd9cdbb, -4.1, 2.5, 0, room);
+  box(8, 0.25, 0.06, 0x8a6a4a, 0, 0.125, -3.97, room);
+  box(0.06, 0.25, 8, 0x8a6a4a, -3.97, 0.125, 0, room);
+  var rug = new THREE.Mesh(new THREE.CylinderGeometry(1.7, 1.7, 0.02, 40), new THREE.MeshLambertMaterial({ color: 0x5a7fa6 }));
+  rug.position.set(0, 0.02, 0.5); room.add(rug);
+
+  // ---------- bed + nightstand + lamp (click -> bed) ----------
+  var bed = group('bed');
+  box(2.1, 0.5, 4.1, 0x8a5a3a, -2.4, 0.25, -1.95, bed);            // frame
+  box(1.9, 0.3, 3.8, 0xf3f0ea, -2.4, 0.65, -2.0, bed);            // mattress
+  box(2.1, 1.5, 0.15, 0x8a5a3a, -2.4, 0.95, -3.95, bed);          // headboard
+  box(0.8, 0.18, 0.55, 0xffffff, -2.95, 0.9, -3.5, bed);           // pillows
+  box(0.8, 0.18, 0.55, 0xffffff, -1.85, 0.9, -3.5, bed);
+  box(2.0, 0.16, 2.6, 0x4f86c6, -2.4, 0.87, -1.1, bed);           // blanket
+  box(0.9, 0.7, 0.8, 0x8a5a3a, -0.75, 0.35, -3.55, bed);          // nightstand
+  var lb = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 0.25, 16), new THREE.MeshLambertMaterial({ color: 0x333333 }));
+  lb.position.set(-0.75, 0.83, -3.55); bed.add(lb);
+  var ls = new THREE.Mesh(new THREE.ConeGeometry(0.3, 0.4, 20, 1, true), new THREE.MeshLambertMaterial({ color: 0xffd9a0, emissive: 0xaa7a30, side: THREE.DoubleSide }));
+  ls.position.set(-0.75, 1.15, -3.55); bed.add(ls);
+
+  // ---------- desk + computer (click -> computer) ----------
+  var desk = group('computer');
+  box(3.2, 0.12, 1.3, 0xc8a06a, 2.2, 1.4, -3.35, desk);           // top
+  box(0.1, 1.34, 1.2, 0xa07848, 0.65, 0.67, -3.4, desk);          // side panels
+  box(0.1, 1.34, 1.2, 0xa07848, 3.75, 0.67, -3.4, desk);
+  box(0.55, 1.1, 1.0, 0x222226, 3.25, 0.55, -3.3, desk);          // PC tower
+  box(0.05, 0.05, 0.02, 0x33ff88, 3.25, 0.95, -2.79, desk, 0x33ff88);
+  box(0.6, 0.05, 0.4, 0x222226, 2.2, 1.485, -3.5, desk);          // monitor stand
+  box(0.1, 0.5, 0.1, 0x222226, 2.2, 1.72, -3.55, desk);
+  box(2.0, 1.15, 0.08, 0x18181c, 2.2, 2.35, -3.5, desk);          // monitor frame
+  box(1.1, 0.04, 0.35, 0x2a2a30, 2.1, 1.48, -2.95, desk);         // keyboard
+  box(0.14, 0.04, 0.22, 0x2a2a30, 2.95, 1.48, -2.95, desk);       // mouse
+  box(0.9, 0.12, 0.9, 0x2f3a4a, 2.0, 0.9, -1.9, desk);           // chair
+  box(0.9, 1.0, 0.1, 0x2f3a4a, 2.0, 1.45, -1.4, desk);
+  box(0.1, 0.6, 0.1, 0x111111, 2.0, 0.55, -1.9, desk);
+  box(0.8, 0.06, 0.8, 0x111111, 2.0, 0.08, -1.9, desk);
+
+  var screen = canvasTex(1024, 564, function (g, w, h) {
+    var bg = g.createLinearGradient(0, 0, w, h); bg.addColorStop(0, '#0f1b3d'); bg.addColorStop(1, '#1d2f63');
+    g.fillStyle = bg; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#0b1229'; g.fillRect(0, 0, w, 56);
+    g.fillStyle = '#ff5f57'; g.beginPath(); g.arc(32, 28, 9, 0, 7); g.fill();
+    g.fillStyle = '#febc2e'; g.beginPath(); g.arc(62, 28, 9, 0, 7); g.fill();
+    g.fillStyle = '#28c840'; g.beginPath(); g.arc(92, 28, 9, 0, 7); g.fill();
+    g.fillStyle = '#9db4ff'; g.font = '600 24px ' + FONT; g.fillText('about_me.txt', 130, 37);
+    g.fillStyle = '#ff9f1a'; g.beginPath(); g.arc(120, 170, 60, 0, 7); g.fill();
+    g.fillStyle = '#fff'; g.font = '700 64px ' + FONT; g.textAlign = 'center'; g.fillText('ศ', 120, 192); g.textAlign = 'left';
+    g.fillStyle = '#fff'; g.font = '700 46px ' + FONT; g.fillText('ศิวัช สินวัฒนาเจริญ', 210, 172);
+    var rows = [['รหัสนิสิต', '6721651858'], ['คณะ', 'ศิลปศาสตร์และวิทยาศาสตร์'], ['สาขา', 'วิทยาการคอมพิวเตอร์'], ['มหาวิทยาลัย', 'เกษตรศาสตร์']];
+    rows.forEach(function (r, i) {
+      var y = 280 + i * 62;
+      g.fillStyle = '#7cc4ff'; g.font = '600 30px ' + FONT; g.fillText(r[0], 60, y);
+      g.fillStyle = '#ffffff'; g.font = '400 34px ' + FONT; g.fillText(r[1], 300, y);
+    });
+  });
+  var scr = new THREE.Mesh(new THREE.PlaneGeometry(1.86, 1.02), new THREE.MeshBasicMaterial({ map: screen.tex }));
+  scr.position.set(2.2, 2.35, -3.455); desk.add(scr);
+
+  // ---------- photo next to the bed (click -> photo) ----------
+  var photo = group('photo');
+  box(1.2, 1.5, 0.06, 0x3b2a1e, -0.8, 2.6, -3.97, photo);
+  var ph = canvasTex(400, 520, function (g, w, h) {   // placeholder until me.jpg loads
+    g.fillStyle = '#dfe6ee'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#9aa8b8'; g.beginPath(); g.arc(200, 200, 80, 0, 7); g.fill();
+    g.beginPath(); g.ellipse(200, 430, 140, 110, 0, 0, 7); g.fill();
+    g.fillStyle = '#54606e'; g.font = '600 26px ' + FONT; g.textAlign = 'center'; g.fillText('วางรูปชื่อ me.jpg', 200, 495);
+  });
+  var photoMat = new THREE.MeshBasicMaterial({ map: ph.tex });
+  var photoPlane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1.3), photoMat);
+  photoPlane.position.set(-0.8, 2.6, -3.935); photo.add(photoPlane);
+  var photoLoaded = false;
+  new THREE.TextureLoader().load('me.jpg', function (t) { photoLoaded = true; photoMat.map = t; photoMat.needsUpdate = true; }, undefined, function () {});
+
+  // ---------- Paint poster on the left wall (click -> paint, click again -> open) ----------
+  var paint = group('paint');
+  box(0.06, 1.9, 2.5, 0x3b2a1e, -3.97, 3.0, -1.6, paint);
+  var pt = canvasTex(512, 380, function (g, w, h) {
+    g.fillStyle = '#f4f4f4'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#2b5fb8'; g.fillRect(0, 0, w, 40);
+    g.fillStyle = '#fff'; g.font = '600 24px ' + FONT; g.fillText('Paint', 14, 28);
+    g.fillStyle = '#dcdcdc'; g.fillRect(0, 40, 70, h - 40);
+    for (var i = 0; i < 6; i++) { g.fillStyle = '#fff'; g.fillRect(10 + (i % 2) * 30, 52 + Math.floor(i / 2) * 32, 24, 24); }
+    g.fillStyle = '#fff'; g.fillRect(80, 50, w - 90, h - 110);
+    g.lineCap = 'round'; g.lineWidth = 10; g.strokeStyle = '#e63946';
+    g.beginPath(); g.moveTo(110, 220); g.bezierCurveTo(170, 90, 260, 300, 330, 150); g.stroke();
+    g.strokeStyle = '#2a9d8f'; g.beginPath(); g.moveTo(120, 300); g.bezierCurveTo(200, 240, 300, 330, 440, 230); g.stroke();
+    g.fillStyle = '#f4a261'; g.beginPath(); g.arc(390, 120, 42, 0, 7); g.fill();
+    g.strokeStyle = '#457b9d'; g.lineWidth = 6; g.strokeRect(190, 80, 100, 60);
+    ['#000', '#e63946', '#f4a261', '#ffd166', '#2a9d8f', '#457b9d', '#6a4c93', '#fff'].forEach(function (c, i) {
+      g.fillStyle = c; g.fillRect(84 + i * 40, h - 46, 32, 32); g.strokeStyle = '#888'; g.lineWidth = 1; g.strokeRect(84 + i * 40, h - 46, 32, 32);
+    });
+  });
+  var pp = new THREE.Mesh(new THREE.PlaneGeometry(2.3, 1.7), new THREE.MeshBasicMaterial({ map: pt.tex }));
+  pp.rotation.y = Math.PI / 2; pp.position.set(-3.935, 3.0, -1.6); paint.add(pp);
+
+  // fonts load late: redraw canvases once Noto Sans Thai is ready
+  if (document.fonts && document.fonts.load) {
+    document.fonts.load('600 30px "Noto Sans Thai"').then(function () { screen.redraw(); pt.redraw(); if (!photoLoaded) ph.redraw(); });
+  }
+
+  // ---------- views + menu ----------
+  var V3 = function (x, y, z) { return new THREE.Vector3(x, y, z); };
+  var VIEWS = {
+    home:     { label: 'ภาพรวม', p: V3(10, 7.5, 11), t: V3(0, 1.6, -1.2), title: 'ห้องนอนของศิวัช', text: 'กดที่ของในห้อง หรือเลือกเมนูด้านล่าง' },
+    bed:      { label: 'เตียงนอน', p: V3(2.2, 4.2, 3.2), t: V3(-2.4, 0.8, -2), title: 'เตียงนอน', text: 'มุมพักผ่อนหลังเขียนโค้ดมาทั้งวัน' },
+    computer: { label: 'โต๊ะคอม', p: V3(2.2, 2.4, -0.2), t: V3(2.2, 2.3, -3.5), title: 'ข้อมูลนิสิต', text: 'ข้อมูลนิสิตบนหน้าจอคอมพิวเตอร์' },
+    photo:    { label: 'รูปของฉัน', p: V3(-0.8, 2.7, -1.0), t: V3(-0.8, 2.6, -3.97), title: 'รูปถ่ายนิสิต', text: 'ศิวัช สินวัฒนาเจริญ' },
+    paint:    { label: 'โปรแกรม Paint', p: V3(-0.7, 3.0, -1.6), t: V3(-3.97, 3.0, -1.6), title: 'โปรแกรม Paint', text: 'ผลงานวิชา Interactive Computer Graphics · กดที่รูปอีกครั้งเพื่อเปิด' }
+  };
+  var menu = document.getElementById('menu'), btns = {};
+  Object.keys(VIEWS).forEach(function (k) {
+    var b = document.createElement('button'); b.textContent = VIEWS[k].label;
+    b.onclick = function () { goTo(k); }; menu.appendChild(b); btns[k] = b;
+  });
+
+  var T = VIEWS.home.t.clone(), current = 'home', tw = null;
+  camera.position.copy(VIEWS.home.p);
+  var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function goTo(name) {
+    var v = VIEWS[name]; current = name;
+    tw = { p0: camera.position.clone(), t0: T.clone(), p1: v.p, t1: v.t, s: performance.now(), d: reduce ? 1 : 1100 };
+    Object.keys(btns).forEach(function (k) { btns[k].classList.toggle('on', k === name); });
+    document.getElementById('t').textContent = v.title;
+    document.getElementById('d').textContent = v.text;
+    document.getElementById('lnk').hidden = name !== 'paint';
+  }
+  goTo('home'); tw = null;
+
+  // ---------- input: drag to orbit, wheel/pinch to zoom, click to focus ----------
+  var ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
+  var clickables = [bed, desk, photo, paint];
+  var ptrs = new Map(), lastPinch = 0, down = null, sph = new THREE.Spherical(), off = new THREE.Vector3();
+  var hint = document.getElementById('hint');
+
+  function pick(cx, cy) {
+    mouse.set(cx / window.innerWidth * 2 - 1, -(cy / window.innerHeight) * 2 + 1);
+    ray.setFromCamera(mouse, camera);
+    var hit = ray.intersectObjects(clickables, true)[0];
+    if (!hit) return null;
+    var o = hit.object; while (o && !o.userData.view) o = o.parent;
+    return o ? o.userData.view : null;
+  }
+  function orbit(dTheta, dPhi, zoom) {
+    off.copy(camera.position).sub(T); sph.setFromVector3(off);
+    sph.theta = Math.max(-0.3, Math.min(Math.PI / 2 + 0.3, sph.theta + dTheta));
+    sph.phi = Math.max(0.3, Math.min(1.65, sph.phi + dPhi));
+    sph.radius = Math.max(2, Math.min(30, sph.radius * zoom));
+    camera.position.copy(T).add(off.setFromSpherical(sph));
+  }
+  var panR = new THREE.Vector3(), panU = new THREE.Vector3(), panD = new THREE.Vector3(), PAN_MIN = V3(-4, 0.2, -4), PAN_MAX = V3(4, 5, 4);
+  function pan(dx, dy) {
+    var k = 2 * camera.position.distanceTo(T) * Math.tan(camera.fov * Math.PI / 360) / window.innerHeight;
+    panR.set(1, 0, 0).applyQuaternion(camera.quaternion);
+    panU.set(0, 1, 0).applyQuaternion(camera.quaternion);
+    panD.set(0, 0, 0).addScaledVector(panR, -dx * k).addScaledVector(panU, dy * k);
+    var nx = Math.max(PAN_MIN.x, Math.min(PAN_MAX.x, T.x + panD.x)) - T.x;
+    var ny = Math.max(PAN_MIN.y, Math.min(PAN_MAX.y, T.y + panD.y)) - T.y;
+    var nz = Math.max(PAN_MIN.z, Math.min(PAN_MAX.z, T.z + panD.z)) - T.z;
+    T.x += nx; T.y += ny; T.z += nz;
+    camera.position.x += nx; camera.position.y += ny; camera.position.z += nz;
+  }
+  function pinch() { var a = Array.from(ptrs.values()); return Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y) || 1; }
+
+  canvas.addEventListener('pointerdown', function (e) {
+    canvas.setPointerCapture(e.pointerId);
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    down = { x: e.clientX, y: e.clientY, moved: false };
+    if (ptrs.size === 2) lastPinch = pinch();
+    hint.classList.add('gone');
+  });
+  canvas.addEventListener('pointermove', function (e) {
+    var p = ptrs.get(e.pointerId);
+    if (!p) { canvas.style.cursor = pick(e.clientX, e.clientY) ? 'pointer' : (e.shiftKey ? 'move' : 'grab'); return; }
+    var dx = e.clientX - p.x, dy = e.clientY - p.y; p.x = e.clientX; p.y = e.clientY;
+    if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) { down.moved = true; tw = null; }
+    if (!down || !down.moved) return;
+    if (ptrs.size === 1) {
+      if (e.shiftKey) pan(dx, dy); else orbit(-dx * 0.006, -dy * 0.006, 1);
+    }
+    else if (ptrs.size === 2) { var d = pinch(); orbit(0, 0, lastPinch / d); lastPinch = d; }
+  });
+  function up(e) {
+    var wasClick = down && !down.moved && ptrs.size === 1;
+    ptrs.delete(e.pointerId); lastPinch = 0;
+    if (wasClick && e.type === 'pointerup') {
+      var v = pick(e.clientX, e.clientY);
+      if (v === 'paint' && current === 'paint') window.open('800_Paint.html', '_blank', 'noopener');
+      else if (v) goTo(v);
+    }
+    if (!ptrs.size) down = null;
+  }
+  function shiftCursor(e) { if (e.key === 'Shift' && !ptrs.size) canvas.style.cursor = e.type === 'keydown' ? 'move' : 'grab'; }
+  window.addEventListener('keydown', shiftCursor); window.addEventListener('keyup', shiftCursor);
+  canvas.addEventListener('pointerup', up);
+  canvas.addEventListener('pointercancel', up);
+  canvas.addEventListener('wheel', function (e) {
+    e.preventDefault(); tw = null; orbit(0, 0, Math.exp(e.deltaY * 0.001)); hint.classList.add('gone');
+  }, { passive: false });
+
+  function resize() {
+    var w = window.innerWidth, h = window.innerHeight;
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h; camera.fov = w / h < 1 ? 62 : 45; camera.updateProjectionMatrix();
+  }
+  window.addEventListener('resize', resize); resize();
+
+  function frame(now) {
+    if (tw) {
+      var k = Math.min(1, (now - tw.s) / tw.d), e = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+      camera.position.lerpVectors(tw.p0, tw.p1, e); T.lerpVectors(tw.t0, tw.t1, e);
+      if (k >= 1) tw = null;
+    }
+    camera.lookAt(T);
+    renderer.render(scene, camera);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
